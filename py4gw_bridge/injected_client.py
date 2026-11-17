@@ -905,19 +905,30 @@ def _handle_command(request: dict[str, Any]) -> dict[str, Any]:
                 return make_error_response(request_id, "validation_args", "args must be a list")
             if not isinstance(raw_kwargs, dict):
                 return make_error_response(request_id, "validation_kwargs", "kwargs must be an object")
+            # `load` already executes the script body once; `run` re-executes it and
+            # then keeps calling main()/update()/draw() every frame. Calling both
+            # ran every one-shot script twice, which is why the console showed two
+            # "Script compiled successfully" lines and side effects happened in
+            # duplicate. The loop is now an explicit request.
+            wants_loop = bool(params.get("loop", False))
             loaded = path
             try:
                 if path and (raw_args or raw_kwargs):
                     loaded = _script_wrapper_with_arguments(path, raw_args, raw_kwargs)
                 if loaded:
                     _script_control().load(loaded)
-                _script_control().run()
+                    if wants_loop:
+                        _script_control().run()
+                else:
+                    _script_control().run()
             except Exception as exc:
                 return make_error_response(request_id, "script_error", f"run {path or '<loaded>'}: {exc}")
             status = _ConsoleBridge.status()
             result = {
                 "running": path or "<loaded script>",
                 "loaded": loaded,
+                "executions": 2 if (loaded and wants_loop) else 1,
+                "loop": wants_loop,
                 "with_arguments": bool(raw_args or raw_kwargs),
                 "args": raw_args,
                 "kwargs": raw_kwargs,
@@ -932,6 +943,11 @@ def _handle_command(request: dict[str, Any]) -> dict[str, Any]:
                     "the script is running in the console slot; if it defines "
                     "main()/update()/draw() the client keeps calling it every frame "
                     "until script.stop"
+                )
+            elif loaded and not wants_loop:
+                result["note"] = (
+                    "executed once: load() runs the body without starting the "
+                    "per-frame callbacks; pass loop=true for a script that expects them"
                 )
             return make_response(request_id, result)
 

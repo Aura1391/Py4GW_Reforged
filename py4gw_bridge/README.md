@@ -559,6 +559,15 @@ with `Botting tree reset / started / stopped and reset`. When `script.run`
 answers `status: Running`, the caller owns the slot and has to close it with
 `script.stop`.
 
+`script.run` executes a script **once**: `load()` already runs the body, and
+`run()` is what starts the callbacks, so calling both ran every one-shot script
+twice and duplicated its side effects. The loop is opt-in with `loop: true`, and
+that path executes the body twice — a quirk of the runtime, worth knowing before
+depending on it. A one-shot script still logs one `No
+main()/update()/draw() function found in the script` line at `ERROR` level; that
+message comes from the console, not from the bridge, and it does not affect the
+script's result.
+
 `system.list_namespaces` now returns both:
 
 - `namespaces`: the ordered list of bridge namespace handles

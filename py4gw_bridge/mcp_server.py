@@ -234,6 +234,14 @@ def _tool_list() -> list[dict[str, Any]]:
                         "description": "Named values, exposed to the script as KWARGS.",
                         "additionalProperties": True,
                     },
+                    "loop": {
+                        "type": "boolean",
+                        "description": (
+                            "Start the per-frame callbacks after loading. Off by default: the script "
+                            "body runs once. On, main()/update()/draw() keep being called every tick and "
+                            "the body is executed twice, so the caller must stop it with stop_script."
+                        ),
+                    },
                 },
                 "required": ["path"],
                 "additionalProperties": False,
@@ -348,6 +356,8 @@ class Py4GWMcpServer:
                 if not isinstance(arguments["kwargs"], dict):
                     raise ValueError("kwargs must be an object")
                 payload_params["kwargs"] = arguments["kwargs"]
+            if arguments.get("loop") is not None:
+                payload_params["loop"] = bool(arguments["loop"])
             params["payload"] = {"command": "script.run", "params": payload_params}
             return _daemon_request(
                 self.daemon_host,
