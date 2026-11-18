@@ -531,6 +531,12 @@ These are explicitly implemented and useful for common tasks.
 - `script.load`
 - `script.run`
 - `script.stop`
+- `widgets.list`
+- `widgets.status`
+- `widgets.enable`
+- `widgets.disable`
+- `widgets.start`
+- `widgets.stop`
 
 `script.*` drives the client's console script slot through
 `PySystem.script_control`. The slot is single: `script.load` replaces whatever
@@ -558,6 +564,49 @@ callbacks, or it will repeat its whole body every frame: a `tree.Start()` inside
 with `Botting tree reset / started / stopped and reset`. When `script.run`
 answers `status: Running`, the caller owns the slot and has to close it with
 `script.stop`.
+
+### Widgets, and running a widget's botting tree
+
+`script.*` drives the console slot, which is **not** the widget layer. A widget
+is owned by `WidgetManager`: it has its own module instance, its own callbacks and
+its own settings, and loading a widget file into the console slot would create a
+second module instance behind the manager's back. Use `widgets.*` instead:
+
+- `widgets.list` — every widget the manager knows, with its enabled state and the
+  state of the botting tree it owns.
+- `widgets.status` — the same record for one widget.
+- `widgets.enable` / `widgets.disable` — what ticking the box in the widget
+  manager does. Enabling loads the module and registers its callbacks;
+  disabling pauses them and runs the widget's `on_disable` hook, which is how a
+  bot stands itself down on purpose. Enabling is refused while a map is loading,
+  because the module runs its first frame against a half-loaded map.
+- `widgets.start` / `widgets.stop` — the widget's own Start/Stop buttons, for
+  widgets that own a botting tree. `widgets.start` requires the widget to be
+  enabled and refuses while a map is loading; `widgets.stop` restores what
+  starting took over (widget states, account isolation, the HeroAI hand-off).
+  A widget without a botting tree answers `widget_has_no_botting_tree`, and one
+  whose module is not loaded answers `widget_module_missing`.
+
+The target is the **plain name**: the script file stem, as the manager indexes it,
+not the window title. `Widgets/Automation/Bots/Vanquish/PyQuishAI_BT.py` is
+`PyQuishAI_BT`.
+
+`widgets.status` reports `botting_tree: null` until the widget has built its tree,
+which a freshly enabled widget does on its first frame. Reading status never
+creates one.
+
+The MCP server exposes them as `list_widgets`, `get_widget_status`,
+`enable_widget`, `disable_widget`, `start_widget` and `stop_widget`, each taking
+the usual `hwnd`/`pid` plus `name`.
+
+Typical run of a bot widget, end to end:
+
+```text
+enable_widget  {"hwnd": 123456, "name": "PyQuishAI_BT"}
+start_widget   {"hwnd": 123456, "name": "PyQuishAI_BT"}   -> botting_tree.started = true
+get_widget_status {"hwnd": 123456, "name": "PyQuishAI_BT"}
+stop_widget    {"hwnd": 123456, "name": "PyQuishAI_BT"}
+```
 
 `script.run` executes a script **once**: `load()` already runs the body, and
 `run()` is what starts the callbacks, so calling both ran every one-shot script
@@ -786,6 +835,22 @@ You can script repeated calls via CLI or a future adapter and collect structured
 - Some return values are complex native/Python objects
 - Use curated endpoints for stable structured output where available
 - Or call smaller methods that return primitives/lists
+
+### `player.get_state` reports `player: null`
+
+- Map transitions and loading screens have no player to read
+- Treat `player` as optional: `player = state.get("player") or {}`
+- The same applies to `position` inside it, and to any monitor that samples while
+  the party crosses a portal
+- `map.get_state` also reports `Unknown Map ID`, `map_id: 0` and `(0, 0)` in that
+  window
+
+### A poller gets no output back
+
+- `client.request` answers with the call's payload, never with the script's
+  stdout: the console text stays in the client
+- Write results to a file and read it, or expose them through a namespace method
+  and call it
 
 ## Next steps (recommended)
 

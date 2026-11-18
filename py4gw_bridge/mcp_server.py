@@ -267,6 +267,114 @@ def _tool_list() -> list[dict[str, Any]]:
                 "additionalProperties": False,
             },
         },
+        {
+            "name": "list_widgets",
+            "description": (
+                "List every widget the target client's widget manager knows: its plain name (the "
+                "script file stem), whether it is enabled, and the state of the botting tree it "
+                "owns, if any."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": target_schema["properties"],
+                "minProperties": 1,
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "get_widget_status",
+            "description": "Report one widget's enabled state and the state of its botting tree.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    **target_schema["properties"],
+                    "name": {
+                        "type": "string",
+                        "description": "Plain name of the widget: the script file stem, e.g. PyQuishAI_BT.",
+                    },
+                },
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "enable_widget",
+            "description": (
+                "Enable a widget in the target client's manager. This loads its module and registers "
+                "its callbacks, exactly like ticking it in the widget manager. Refused while a map is "
+                "loading."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    **target_schema["properties"],
+                    "name": {
+                        "type": "string",
+                        "description": "Plain name of the widget: the script file stem, e.g. PyQuishAI_BT.",
+                    },
+                },
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "disable_widget",
+            "description": (
+                "Disable a widget: its callbacks are paused and its on_disable hook runs, which is how "
+                "a bot deliberately stands itself down."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    **target_schema["properties"],
+                    "name": {
+                        "type": "string",
+                        "description": "Plain name of the widget: the script file stem, e.g. PyQuishAI_BT.",
+                    },
+                },
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "start_widget",
+            "description": (
+                "Start the botting tree a widget owns, with the same effect as pressing its own Start "
+                "button. The widget must be enabled, and a map load refuses the call. Widgets without a "
+                "botting tree answer widget_has_no_botting_tree."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    **target_schema["properties"],
+                    "name": {
+                        "type": "string",
+                        "description": "Plain name of the widget: the script file stem, e.g. PyQuishAI_BT.",
+                    },
+                },
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "stop_widget",
+            "description": (
+                "Stop the botting tree a widget owns and restore what starting it took over: widget "
+                "states, account isolation and the HeroAI hand-off."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    **target_schema["properties"],
+                    "name": {
+                        "type": "string",
+                        "description": "Plain name of the widget: the script file stem, e.g. PyQuishAI_BT.",
+                    },
+                },
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
     ]
 
 
@@ -385,6 +493,37 @@ class Py4GWMcpServer:
                 "client.request",
                 params,
                 timeout=self.timeout,
+            )
+        if name in (
+            "list_widgets",
+            "get_widget_status",
+            "enable_widget",
+            "disable_widget",
+            "start_widget",
+            "stop_widget",
+        ):
+            command_map = {
+                "list_widgets": "widgets.list",
+                "get_widget_status": "widgets.status",
+                "enable_widget": "widgets.enable",
+                "disable_widget": "widgets.disable",
+                "start_widget": "widgets.start",
+                "stop_widget": "widgets.stop",
+            }
+            params = self._target_params(arguments)
+            payload_params: dict[str, Any] = {}
+            if command_map[name] != "widgets.list":
+                widget_name = str(arguments.get("name") or "").strip()
+                if not widget_name:
+                    raise ValueError("name is required")
+                payload_params["name"] = widget_name
+            params["payload"] = {"command": command_map[name], "params": payload_params}
+            return _daemon_request(
+                self.daemon_host,
+                self.daemon_port,
+                "client.request",
+                params,
+                timeout=max(self.timeout, 15.0),
             )
         raise ValueError(f"Unknown tool: {name}")
 

@@ -502,6 +502,60 @@ def _script_control():
     return control if control is not None else PySystem.Console
 
 
+def _widget_handler():
+    """Resolve the widget manager lazily.
+
+    The injected client loads before the widget layer is ready, so the manager is
+    imported at call time rather than at module import.
+    """
+    from Py4GWCoreLib.py4gwcorelib_src.WidgetManager import get_widget_handler
+
+    return get_widget_handler()
+
+
+def _find_widget(name: str):
+    """Resolve a widget by the plain name the manager indexes it by (the file stem).
+
+    `get_widget_info` is the manager's own accessor; the scan is the fallback for a
+    manager that does not expose it.
+    """
+    handler = _widget_handler()
+    getter = getattr(handler, "get_widget_info", None)
+    if callable(getter):
+        widget = getter(name)
+        if widget is not None:
+            return handler, widget
+    for candidate in (getattr(handler, "widgets", {}) or {}).values():
+        if str(getattr(candidate, "plain_name", "") or "") == name:
+            return handler, candidate
+    return handler, None
+
+
+def _widget_payload(widget: Any) -> dict[str, Any]:
+    """Report one widget without changing its state.
+
+    `botting_tree` is null until the widget has built one, which is what a caller
+    needs to know before asking to start or stop it.
+    """
+    module = getattr(widget, "module", None)
+    tree = getattr(module, "botting_tree", None) if module is not None else None
+    payload: dict[str, Any] = {
+        "name": str(getattr(widget, "plain_name", "") or ""),
+        "enabled": bool(getattr(widget, "enabled", False)),
+        "module_loaded": module is not None,
+        "botting_tree": None,
+    }
+    if tree is not None:
+        try:
+            payload["botting_tree"] = {
+                "started": bool(tree.IsStarted()),
+                "paused": bool(tree.IsPaused()),
+            }
+        except Exception as exc:  # a broken tree must not take the listing down
+            payload["botting_tree"] = {"error": str(exc)}
+    return payload
+
+
 class _ConsoleBridge:
     @staticmethod
     def load(path: str) -> None:
@@ -807,6 +861,53 @@ def _command_registry() -> list[dict[str, Any]]:
             "scope": "script",
         },
         {
+            "command": "widgets.list",
+            "access": "read",
+            "safety": "safe",
+            "kind": "curated",
+            "scope": "widgets",
+            "note": "Every widget the manager knows, with its enabled state and botting tree.",
+        },
+        {
+            "command": "widgets.status",
+            "access": "read",
+            "safety": "safe",
+            "kind": "curated",
+            "scope": "widgets",
+        },
+        {
+            "command": "widgets.enable",
+            "access": "write",
+            "safety": "guarded",
+            "kind": "curated",
+            "scope": "widgets",
+            "guards": ["reject_if_loading"],
+        },
+        {
+            "command": "widgets.disable",
+            "access": "write",
+            "safety": "guarded",
+            "kind": "curated",
+            "scope": "widgets",
+        },
+        {
+            "command": "widgets.start",
+            "access": "write",
+            "safety": "guarded",
+            "kind": "curated",
+            "scope": "widgets",
+            "guards": ["widget_must_be_enabled", "widget_must_own_a_botting_tree", "reject_if_loading"],
+            "note": "Same effect as the Start button of a widget that owns a botting tree.",
+        },
+        {
+            "command": "widgets.stop",
+            "access": "write",
+            "safety": "guarded",
+            "kind": "curated",
+            "scope": "widgets",
+            "guards": ["widget_must_own_a_botting_tree"],
+        },
+        {
             "command": "shmem.send_command",
             "access": "write",
             "safety": "guarded",
@@ -963,6 +1064,78 @@ def _handle_command(request: dict[str, Any]) -> dict[str, Any]:
                 return make_response(request_id, {"status": _ConsoleBridge.status()})
             except Exception as exc:
                 return make_error_response(request_id, "script_error", f"status: {exc}")
+
+        if command in (
+            "widgets.list",
+            "widgets.status",
+            "widgets.enable",
+            "widgets.disable",
+            "widgets.start",
+            "widgets.stop",
+        ):
+            if command == "widgets.list":
+                manager = _widget_handler()
+                records = [
+                    _widget_payload(widget)
+                    for widget in (getattr(manager, "widgets", {}) or {}).values()
+                ]
+                records.sort(key=lambda record: record["name"].lower())
+                return make_response(request_id, {"count": len(records), "widgets": records})
+
+            name = str(params.get("name") or "").strip()
+            if not name:
+                return make_error_response(request_id, "validation_name", "name required")
+
+            if command in ("widgets.enable", "widgets.start") and Map.IsMapLoading():
+                return make_error_response(
+                    request_id, "guard_map_loading", "map is loading", retryable=True
+                )
+
+            manager, widget = _find_widget(name)
+            if widget is None:
+                return make_error_response(request_id, "widget_not_found", f"no widget named {name}")
+            plain_name = str(getattr(widget, "plain_name", "") or name)
+
+            if command == "widgets.status":
+                return make_response(request_id, _widget_payload(widget))
+
+            if command == "widgets.enable":
+                manager.enable_widget(plain_name)
+                return make_response(request_id, _widget_payload(widget))
+
+            if command == "widgets.disable":
+                manager.disable_widget(plain_name)
+                return make_response(request_id, _widget_payload(widget))
+
+            # start/stop only mean something for a widget that owns a botting tree.
+            module = getattr(widget, "module", None)
+            if module is None:
+                return make_error_response(
+                    request_id,
+                    "widget_module_missing",
+                    f"{plain_name} has no loaded module; enable it first",
+                )
+            factory = getattr(module, "ensure_botting_tree", None)
+            tree = factory() if callable(factory) else getattr(module, "botting_tree", None)
+            if tree is None:
+                return make_error_response(
+                    request_id,
+                    "widget_has_no_botting_tree",
+                    f"{plain_name} does not own a botting tree",
+                )
+
+            was_started = bool(tree.IsStarted())
+            if command == "widgets.start":
+                if not bool(getattr(widget, "enabled", False)):
+                    return make_error_response(
+                        request_id, "guard_widget_disabled", f"{plain_name} is not enabled"
+                    )
+                tree.Start()
+            else:
+                tree.Stop()
+            payload = _widget_payload(widget)
+            payload["was_started"] = was_started
+            return make_response(request_id, payload)
 
         if command == "agent.list":
             group = str(params.get("group") or "all").lower()
