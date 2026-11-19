@@ -72,6 +72,7 @@ class BridgeClientState:
         self.inbox: "queue.Queue[dict[str, Any]]" = queue.Queue()
         self.outbox: "queue.Queue[dict[str, Any]]" = queue.Queue()
         self.pending_ops: dict[str, dict[str, Any]] = {}
+        self.pending_widget_reload = False
         self.connected = False
         self.session_id = ""
         self.last_error = ""
@@ -531,6 +532,24 @@ def _find_widget(name: str):
     return handler, None
 
 
+def _widget_config_functions(widget: Any) -> tuple[Any, Any]:
+    """Resolve the config surface a widget declares for the bridge.
+
+    Same idea as `ensure_botting_tree`: the widget owns the functions and the
+    bridge only calls them, so no command ever pokes a widget's internals. A
+    widget that declares neither cannot be configured remotely.
+    """
+    module = getattr(widget, "module", None)
+    if module is None:
+        return None, None
+    getter = getattr(module, "bridge_config_get", None)
+    setter = getattr(module, "bridge_config_set", None)
+    return (
+        getter if callable(getter) else None,
+        setter if callable(setter) else None,
+    )
+
+
 def _widget_payload(widget: Any) -> dict[str, Any]:
     """Report one widget without changing its state.
 
@@ -908,6 +927,32 @@ def _command_registry() -> list[dict[str, Any]]:
             "guards": ["widget_must_own_a_botting_tree"],
         },
         {
+            "command": "widgets.reload",
+            "access": "write",
+            "safety": "guarded",
+            "kind": "curated",
+            "scope": "widgets",
+            "guards": ["reject_if_loading"],
+            "note": "Re-runs the manager's discovery: every widget is disabled and reimported, then re-enabled if it was.",
+        },
+        {
+            "command": "widgets.config.get",
+            "access": "read",
+            "safety": "safe",
+            "kind": "curated",
+            "scope": "widgets",
+            "note": "The settings a widget declares for the bridge, plus whether they are writable right now.",
+        },
+        {
+            "command": "widgets.config.set",
+            "access": "write",
+            "safety": "guarded",
+            "kind": "curated",
+            "scope": "widgets",
+            "guards": ["reject_if_loading"],
+            "note": "Writes through the widget's own setter; the widget answers with the reason when it refuses.",
+        },
+        {
             "command": "shmem.send_command",
             "access": "write",
             "safety": "guarded",
@@ -1072,6 +1117,9 @@ def _handle_command(request: dict[str, Any]) -> dict[str, Any]:
             "widgets.disable",
             "widgets.start",
             "widgets.stop",
+            "widgets.reload",
+            "widgets.config.get",
+            "widgets.config.set",
         ):
             if command == "widgets.list":
                 manager = _widget_handler()
@@ -1081,6 +1129,30 @@ def _handle_command(request: dict[str, Any]) -> dict[str, Any]:
                 ]
                 records.sort(key=lambda record: record["name"].lower())
                 return make_response(request_id, {"count": len(records), "widgets": records})
+
+            if command == "widgets.reload":
+                if Map.IsMapLoading():
+                    return make_error_response(
+                        request_id, "guard_map_loading", "map is loading", retryable=True
+                    )
+                manager = _widget_handler()
+                started_before = [
+                    str(getattr(widget, "plain_name", "") or "")
+                    for widget in (getattr(manager, "widgets", {}) or {}).values()
+                    if (_widget_payload(widget).get("botting_tree") or {}).get("started") is True
+                ]
+                STATE.pending_widget_reload = True
+                return make_response(
+                    request_id,
+                    {
+                        "scheduled": True,
+                        "started_before": started_before,
+                        "note": (
+                            "The manager disables and reimports every widget on the next frame; "
+                            "widgets enabled now come back enabled, running trees do not."
+                        ),
+                    },
+                )
 
             name = str(params.get("name") or "").strip()
             if not name:
@@ -1096,8 +1168,71 @@ def _handle_command(request: dict[str, Any]) -> dict[str, Any]:
                 return make_error_response(request_id, "widget_not_found", f"no widget named {name}")
             plain_name = str(getattr(widget, "plain_name", "") or name)
 
+            if command.startswith("widgets.config.") and getattr(widget, "module", None) is None:
+                return make_error_response(
+                    request_id,
+                    "widget_module_missing",
+                    f"{plain_name} has no loaded module; enable it first",
+                )
+
             if command == "widgets.status":
                 return make_response(request_id, _widget_payload(widget))
+
+            if command == "widgets.config.get":
+                getter, _setter = _widget_config_functions(widget)
+                if getter is None:
+                    return make_error_response(
+                        request_id,
+                        "widget_config_unavailable",
+                        f"{plain_name} declares no bridge_config_get",
+                    )
+                try:
+                    config = getter()
+                except Exception as exc:
+                    return make_error_response(
+                        request_id, "widget_config_error", f"get: {exc}"
+                    )
+                return make_response(request_id, {"name": plain_name, "config": config})
+
+            if command == "widgets.config.set":
+                if Map.IsMapLoading():
+                    return make_error_response(
+                        request_id, "guard_map_loading", "map is loading", retryable=True
+                    )
+                values = params.get("values")
+                if not isinstance(values, dict) or not values:
+                    return make_error_response(
+                        request_id, "validation_values", "values must be a non-empty object"
+                    )
+                _getter, setter = _widget_config_functions(widget)
+                if setter is None:
+                    return make_error_response(
+                        request_id,
+                        "widget_config_unavailable",
+                        f"{plain_name} declares no bridge_config_set",
+                    )
+                try:
+                    result = setter(values)
+                except Exception as exc:
+                    return make_error_response(
+                        request_id, "widget_config_error", f"set: {exc}"
+                    )
+                refusal = result.get("error") if isinstance(result, dict) else None
+                if isinstance(refusal, dict):
+                    return make_error_response(
+                        request_id,
+                        str(refusal.get("code") or "widget_config_rejected"),
+                        str(refusal.get("message") or "the widget refused the change"),
+                    )
+                if not isinstance(result, dict):
+                    return make_error_response(
+                        request_id,
+                        "widget_config_error",
+                        "the widget's setter returned no record",
+                    )
+                payload = {"name": plain_name}
+                payload.update(result)
+                return make_response(request_id, payload)
 
             if command == "widgets.enable":
                 manager.enable_widget(plain_name)
@@ -1356,6 +1491,45 @@ def _process_inbox():
         STATE.requests_processed += 1
 
 
+def _run_pending_widget_reload():
+    """Ask the manager for a full widget reload, once per scheduled request.
+
+    `WidgetManager.reload_widgets()` disables every enabled widget before it
+    rediscovers them, and this widget's `on_disable` closes the bridge socket.
+    The reply to a command is queued after its handler returns and the socket
+    loop is what flushes it, so closing the socket inside the handler would lose
+    the answer: the command only schedules the reload and `main()` runs it.
+    """
+    if not STATE.pending_widget_reload:
+        return
+    STATE.pending_widget_reload = False
+    reloader = getattr(_widget_handler(), "reload_widgets", None)
+    if not callable(reloader):
+        STATE.last_error = "widgets.reload: the manager exposes no reload_widgets"
+        return
+    reloader()
+
+
+def on_enable():
+    """Reopen the socket after the manager enables the widget again.
+
+    A freshly imported module is left to `main()`, which loads the saved
+    settings first; the start that needs them belongs to that path.
+    """
+    if INI_KEY:
+        STATE.start()
+
+
+def on_disable():
+    """Close the socket when the manager disables the widget.
+
+    Without this the thread outlives the module that owns it: the manager
+    imports this file fresh on every load, and a stale loop would keep answering
+    with the command table it was started with, as a second session.
+    """
+    STATE.stop()
+
+
 def tooltip():
     PyImGui.begin_tooltip()
     title_color = Color(255, 200, 100, 255)
@@ -1428,6 +1602,7 @@ def main():
             STATE.start()
         _process_inbox()
         _update_pending_ops()
+        _run_pending_widget_reload()
     except Exception as exc:
         STATE.last_error = f"main: {exc}"
         try:

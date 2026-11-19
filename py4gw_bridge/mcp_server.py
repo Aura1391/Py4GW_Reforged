@@ -375,6 +375,72 @@ def _tool_list() -> list[dict[str, Any]]:
                 "additionalProperties": False,
             },
         },
+        {
+            "name": "reload_widgets",
+            "description": (
+                "Re-run the widget manager's discovery: every enabled widget is disabled, its file "
+                "reimported, and it is enabled again if it was enabled before. This is how a change "
+                "under Widgets/ or Py4GWCoreLib/ reaches a running client without a game restart. "
+                "Botting trees that were running are stopped, the bridge itself reconnects, and a "
+                "map load refuses the call."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": target_schema["properties"],
+                "minProperties": 1,
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "get_widget_config",
+            "description": (
+                "Read the configuration a widget declares for the bridge: the settings it exposes, "
+                "plus locked/writable so a caller can tell whether a write would be accepted right now. "
+                "Widgets that expose no configuration answer widget_config_unavailable."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    **target_schema["properties"],
+                    "name": {
+                        "type": "string",
+                        "description": "Plain name of the widget: the script file stem, e.g. PyQuishAI_BT.",
+                    },
+                },
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "set_widget_config",
+            "description": (
+                "Change a widget's configuration by writing through the widget's own setter, which keeps "
+                "derived state in sync and persists what its window persists. Call get_widget_config "
+                "first: writable_keys lists what this widget accepts, and the widget itself refuses "
+                "changes in states its own window forbids (guard_widget_running, "
+                "guard_queue_not_empty). Values are merged, not replaced."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    **target_schema["properties"],
+                    "name": {
+                        "type": "string",
+                        "description": "Plain name of the widget: the script file stem, e.g. PyQuishAI_BT.",
+                    },
+                    "values": {
+                        "type": "object",
+                        "description": (
+                            "Settings to change, keyed by the names get_widget_config reports in "
+                            "writable_keys. Unknown keys are refused instead of ignored."
+                        ),
+                        "minProperties": 1,
+                    },
+                },
+                "required": ["name", "values"],
+                "additionalProperties": False,
+            },
+        },
     ]
 
 
@@ -501,6 +567,9 @@ class Py4GWMcpServer:
             "disable_widget",
             "start_widget",
             "stop_widget",
+            "reload_widgets",
+            "get_widget_config",
+            "set_widget_config",
         ):
             command_map = {
                 "list_widgets": "widgets.list",
@@ -509,14 +578,22 @@ class Py4GWMcpServer:
                 "disable_widget": "widgets.disable",
                 "start_widget": "widgets.start",
                 "stop_widget": "widgets.stop",
+                "reload_widgets": "widgets.reload",
+                "get_widget_config": "widgets.config.get",
+                "set_widget_config": "widgets.config.set",
             }
             params = self._target_params(arguments)
             payload_params: dict[str, Any] = {}
-            if command_map[name] != "widgets.list":
+            if command_map[name] not in ("widgets.list", "widgets.reload"):
                 widget_name = str(arguments.get("name") or "").strip()
                 if not widget_name:
                     raise ValueError("name is required")
                 payload_params["name"] = widget_name
+            if name == "set_widget_config":
+                values = arguments.get("values")
+                if not isinstance(values, dict) or not values:
+                    raise ValueError("values must be a non-empty object")
+                payload_params["values"] = values
             params["payload"] = {"command": command_map[name], "params": payload_params}
             return _daemon_request(
                 self.daemon_host,
