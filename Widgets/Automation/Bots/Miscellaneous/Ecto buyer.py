@@ -64,16 +64,6 @@ MODULE_NAME = "Ecto Buyer"
 MODULE_ICON = "Assets/Textures/Item Models/00930-Glob_of_Ectoplasm.png"
 OPTIONAL = True
 
-__widget__ = {
-    "name": "Ecto Buyer",
-    "enabled": False,
-    "category": "Automation",
-    "subcategory": "Bots",
-    "icon": "ICON_COINS",
-    "quickdock": False,
-    "hidden": False,
-}
-
 # The widget manager resolves remote enable/disable by the file stem, exact match
 # (WidgetHandler._get_widget_by_plain_name), so this string has to keep the
 # lowercase "b" of "Ecto buyer.py". Renaming the file would change this value.
@@ -287,6 +277,21 @@ def _storage_gold() -> int:
         return 0
 
 
+# The client prints gold with "." between thousands, so the widget's numbers read
+# the same way the game reads them. One constant keeps it a one-line change for a
+# client that groups with commas instead.
+_GROUP_SEPARATOR = "."
+
+
+def _format_gold(value: int | float) -> str:
+    """Group a gold amount for display: 1234567 -> 1.234.567.
+
+    Display only. Gold that travels to another account or to the buy routine stays
+    an int; formatting is never parsed back.
+    """
+    return f"{int(value):,}".replace(",", _GROUP_SEPARATOR)
+
+
 def _trader_position() -> tuple[float, float] | None:
     """Nearest Rare Material Trader to the player, or None when there is none.
 
@@ -330,7 +335,8 @@ def _buy_coroutine(position: tuple[float, float]):
         _status = f"done: {bought} ecto bought"
         _last_outcome = {"state": "done", "bought": bought, "msg": _status}
         _log(
-            f"Bought {bought} ecto. Storage gold {_storage_gold()} (threshold {_threshold})."
+            f"Bought {bought} ecto. Storage gold {_format_gold(_storage_gold())}"
+            f" (threshold {_format_gold(_threshold)})."
             f" Metrics: {_last_metrics}",
             PySystem.Console.MessageType.Success if bought else PySystem.Console.MessageType.Info,
         )
@@ -355,7 +361,10 @@ def _start_buy() -> bool:
         return False
     storage_gold = _storage_gold()
     if storage_gold <= _threshold:
-        _status = f"waiting: storage {storage_gold} <= threshold {_threshold}"
+        _status = (
+            f"waiting: storage {_format_gold(storage_gold)}"
+            f" <= threshold {_format_gold(_threshold)}"
+        )
         return False
     position = _trader_position()
     if position is None:
@@ -365,7 +374,8 @@ def _start_buy() -> bool:
     _status = "buying"
     _last_outcome = None
     _log(
-        f"Starting: character {_character_gold()}, storage {storage_gold}, threshold {_threshold},"
+        f"Starting: character {_format_gold(_character_gold())},"
+        f" storage {_format_gold(storage_gold)}, threshold {_format_gold(_threshold)},"
         f" trader at ({position[0]:.0f}, {position[1]:.0f})."
     )
     GLOBAL_CACHE.Coroutines.append(_buy_coroutine(position))
@@ -752,11 +762,13 @@ def draw() -> None:
         character_gold = _character_gold()
         storage_gold = _storage_gold()
 
-        PyImGui.text(f"Character gold: {character_gold:,}")
-        PyImGui.text(f"Storage gold:   {storage_gold:,}")
+        PyImGui.text(f"Character gold: {_format_gold(character_gold)}")
+        PyImGui.text(f"Storage gold:   {_format_gold(storage_gold)}")
         PyImGui.separator()
 
         new_threshold = PyImGui.input_int("Storage gold threshold", int(_threshold), 10_000, 100_000)
+        PyImGui.same_line(0, 12)
+        PyImGui.text_disabled(f"= {_format_gold(new_threshold)}")
         if new_threshold != _threshold:
             _threshold = max(0, int(new_threshold))
             _save_settings()
@@ -827,16 +839,16 @@ def draw() -> None:
         _close_self("its window was closed")
 
 
-def reset_on_load() -> None:
-    """Clear the transient state when the widget is (re)loaded.
+def on_enable() -> None:
+    """Put the transient state back when the manager switches the widget on.
 
-    The module globals start fresh on a reload, so this only has to put the display
-    timer back. A sequence that was already running keeps running inside the
-    coroutine manager: reloading in the middle of a run is the one way to end up
-    with two.
+    The module globals are already fresh after a reload, so this only matters when
+    the same instance is re-enabled. `_running` is deliberately left alone: a
+    purchase started before the widget was switched off keeps running inside the
+    coroutine manager, and clearing the flag here would let a second sequence start
+    on top of the first one.
     """
-    global _running, _status, _last_metrics, _last_outcome, _trader_display
-    _running = False
+    global _status, _last_metrics, _last_outcome, _trader_display
     _status = "idle"
     _last_metrics = None
     _last_outcome = None
