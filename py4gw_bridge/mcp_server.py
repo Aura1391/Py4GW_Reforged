@@ -208,66 +208,6 @@ def _tool_list() -> list[dict[str, Any]]:
             },
         },
         {
-            "name": "run_script",
-            "description": (
-                "Load and run a Python script inside the injected client's console slot. "
-                "The client keeps a single slot, so this replaces whatever was loaded before it. "
-                "A script that defines main()/update()/draw() becomes a per-frame callback: the client "
-                "keeps calling it on every tick until stop_script, so a one-shot script must not define them. "
-                "Optional arguments are published to the script as the ARGS list and the KWARGS dict, "
-                "and the script runs as __main__. "
-                "The path is resolved by the client, so use an absolute path or one under the project root."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "hwnd": {"type": "integer"},
-                    "pid": {"type": "integer"},
-                    "path": {"type": "string"},
-                    "args": {
-                        "type": "array",
-                        "description": "Positional values, exposed to the script as ARGS.",
-                        "items": {},
-                    },
-                    "kwargs": {
-                        "type": "object",
-                        "description": "Named values, exposed to the script as KWARGS.",
-                        "additionalProperties": True,
-                    },
-                    "loop": {
-                        "type": "boolean",
-                        "description": (
-                            "Start the per-frame callbacks after loading. Off by default: the script "
-                            "body runs once. On, main()/update()/draw() keep being called every tick and "
-                            "the body is executed twice, so the caller must stop it with stop_script."
-                        ),
-                    },
-                },
-                "required": ["path"],
-                "additionalProperties": False,
-            },
-        },
-        {
-            "name": "stop_script",
-            "description": "Stop the script running in the target client's console slot.",
-            "inputSchema": {
-                "type": "object",
-                "properties": target_schema["properties"],
-                "minProperties": 1,
-                "additionalProperties": False,
-            },
-        },
-        {
-            "name": "get_script_status",
-            "description": "Report the state of the target client's console script slot.",
-            "inputSchema": {
-                "type": "object",
-                "properties": target_schema["properties"],
-                "minProperties": 1,
-                "additionalProperties": False,
-            },
-        },
-        {
             "name": "list_widgets",
             "description": (
                 "List every widget the target client's widget manager knows: its plain name (the "
@@ -513,50 +453,6 @@ class Py4GWMcpServer:
                 self.daemon_host,
                 self.daemon_port,
                 "client.list_agents",
-                params,
-                timeout=self.timeout,
-            )
-        if name == "run_script":
-            params = self._target_params(arguments)
-            path = str(arguments.get("path") or "").strip()
-            if not path:
-                raise ValueError("path is required")
-            payload_params: dict[str, Any] = {"path": path}
-            if "args" in arguments and arguments.get("args") is not None:
-                if not isinstance(arguments["args"], list):
-                    raise ValueError("args must be a list")
-                payload_params["args"] = arguments["args"]
-            if "kwargs" in arguments and arguments.get("kwargs") is not None:
-                if not isinstance(arguments["kwargs"], dict):
-                    raise ValueError("kwargs must be an object")
-                payload_params["kwargs"] = arguments["kwargs"]
-            if arguments.get("loop") is not None:
-                payload_params["loop"] = bool(arguments["loop"])
-            params["payload"] = {"command": "script.run", "params": payload_params}
-            return _daemon_request(
-                self.daemon_host,
-                self.daemon_port,
-                "client.request",
-                params,
-                timeout=max(self.timeout, 15.0),
-            )
-        if name == "stop_script":
-            params = self._target_params(arguments)
-            params["payload"] = {"command": "script.stop", "params": {}}
-            return _daemon_request(
-                self.daemon_host,
-                self.daemon_port,
-                "client.request",
-                params,
-                timeout=self.timeout,
-            )
-        if name == "get_script_status":
-            params = self._target_params(arguments)
-            params["payload"] = {"command": "script.status", "params": {}}
-            return _daemon_request(
-                self.daemon_host,
-                self.daemon_port,
-                "client.request",
                 params,
                 timeout=self.timeout,
             )

@@ -249,7 +249,7 @@ python -m py4gw_bridge.mcp_server --host 127.0.0.1 --port 47812 --timeout 5.0
 
 - `--host` / `--port`: the daemon **control** endpoint, not the widget ingress
 - `--timeout`: default per-request timeout; the tools that wait on a client
-  (`run_script`, `enable_widget`, `set_widget_config`…) raise it to at least 15s
+  (`enable_widget`, `set_widget_config`, `reload_widgets`…) raise it to at least 15s
 - every tool takes `hwnd` or `pid` to pick the client, except `list_clients`,
   which asks the daemon
 
@@ -626,10 +626,6 @@ These are explicitly implemented and useful for common tasks.
 - `map.skip_cinematic`
 - `ops.get_status`
 - `shmem.send_command`
-- `script.status`
-- `script.load`
-- `script.run`
-- `script.stop`
 - `widgets.list`
 - `widgets.status`
 - `widgets.enable`
@@ -640,39 +636,12 @@ These are explicitly implemented and useful for common tasks.
 - `widgets.config.get`
 - `widgets.config.set`
 
-`script.*` drives the client's console script slot through
-`PySystem.script_control`. The slot is single: `script.load` replaces whatever
-was loaded before it, and a module-level body runs on load while `run()` calls
-`main()`. The MCP server exposes them as `run_script` (path), `stop_script` and
-`get_script_status`.
-
-`script.run` accepts `args` (list) and `kwargs` (object). The runtime loads a
-script by path and has no parameter channel, so the bridge writes a generated
-wrapper that publishes them as the globals `ARGS` and `KWARGS` before executing
-the target's source, and sets `__name__` to `__main__` so a
-`if __name__ == "__main__"` guard still fires:
-
-```python
-print(ARGS)          # []
-print(KWARGS.get("bounty"))
-```
-
-**One shot versus per-frame.** The console treats `main()`, `update()` and
-`draw()` as per-frame callbacks and keeps calling them for as long as the script
-sits in the slot, re-running the module on every tick. A probe or a setup script
-that starts a bot must therefore be written as module-level code with no
-callbacks, or it will repeat its whole body every frame: a `tree.Start()` inside
-`main()` restarts the tree dozens of times per minute, and the console log fills
-with `Botting tree reset / started / stopped and reset`. When `script.run`
-answers `status: Running`, the caller owns the slot and has to close it with
-`script.stop`.
-
 ### Widgets, and running a widget's botting tree
 
-`script.*` drives the console slot, which is **not** the widget layer. A widget
-is owned by `WidgetManager`: it has its own module instance, its own callbacks and
-its own settings, and loading a widget file into the console slot would create a
-second module instance behind the manager's back. Use `widgets.*` instead:
+A widget is owned by `WidgetManager`: it has its own module instance, its own
+callbacks and its own settings. The manager is the only owner that can start it,
+record that it is enabled and keep its state, so everything that touches a widget
+goes through `widgets.*`:
 
 - `widgets.list` — every widget the manager knows, with its enabled state and the
   state of the botting tree it owns.
@@ -821,15 +790,6 @@ start_widget   {"hwnd": 123456, "name": "PyQuishAI_BT"}   -> botting_tree.starte
 get_widget_status {"hwnd": 123456, "name": "PyQuishAI_BT"}
 stop_widget    {"hwnd": 123456, "name": "PyQuishAI_BT"}
 ```
-
-`script.run` executes a script **once**: `load()` already runs the body, and
-`run()` is what starts the callbacks, so calling both ran every one-shot script
-twice and duplicated its side effects. The loop is opt-in with `loop: true`, and
-that path executes the body twice — a quirk of the runtime, worth knowing before
-depending on it. A one-shot script still logs one `No
-main()/update()/draw() function found in the script` line at `ERROR` level; that
-message comes from the console, not from the bridge, and it does not affect the
-script's result.
 
 `system.list_namespaces` now returns both:
 
