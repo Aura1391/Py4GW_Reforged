@@ -1208,6 +1208,7 @@ class ModelID(IntEnum):
     Elonian_Leather_Square = 943
     Eaglecrest_Axe = 1985
     Emerald_Blade = 1976
+    Empowering_Feast = 38618
     Enchanted_Lodestone = 431
     Elemental_Crystal_Shard = 38302
     Elemental_Keystone = 38301
@@ -1332,6 +1333,7 @@ class ModelID(IntEnum):
     Heket_Tongue = 19199
     Heket_Warrior_Mini = 22760
     Heleynes_Insight = 36676
+    Heroes_Trifecta = 38619
     Heros_Handbook = 26899
     Heros_Zaishen_Strongbox = 36666
     Herring_Mini_Black_Moa_Chick_Incubator = 26502
@@ -1356,6 +1358,10 @@ class ModelID(IntEnum):
     Imperial_Guard_Requisition_Order = 29108
     Imperial_Guard_Summon = 30210
     Incubus_Wing = 27034
+    Infinite_Birds_Eye_Compass = 38616
+    Infinite_Identification_Kit = 38620
+    Infinite_Stalkers_Ration = 38615
+    Infinite_Superior_Salvage_Kit = 38621
     Inscribed_Secret = 19196
     Inscribed_Shard = 1587
     Inscriptions_All = 15542
@@ -1580,6 +1586,7 @@ class ModelID(IntEnum):
     Proof_Of_Triumph = 38031
     Pulsating_Growth = 824
     Pumpkin_Cookie = 28433
+    Purveyors_Bell = 38626
     Putrid_Cyst = 827
     Quetzal_Crest = 27039
     Quetzal_Sly_Mini = 32523
@@ -1593,6 +1600,7 @@ class ModelID(IntEnum):
     Red_Iris_Flower = 2994
     Red_Rock_Candy = 31153
     Refined_Jelly = 19039
+    Reforged_Coin = 38623
     Rift_Warden_Mini = 36651
     Ritualist_Elite_Tome = 21794
     Ritualist_Tome = 21804
